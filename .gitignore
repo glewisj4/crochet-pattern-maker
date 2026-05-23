@@ -1,0 +1,26 @@
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Build outputs
+build/
+dist/
+*.spec
+
+# Local/generated exports and prototypes
+planning_output/
+sample_export_bundle/
+*_gui_preview.jpg
+*_preview.jpg
+*_shape_preview.jpg
+*_skeleton_preview.jpg
+gemini_*.txt
+gemini_*.jpg
+pattern_output.txt
+4666_body_sphere_sample.txt
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+
