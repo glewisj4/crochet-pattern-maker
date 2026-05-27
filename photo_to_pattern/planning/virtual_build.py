@@ -156,7 +156,9 @@ def calculate_hausdorff_distance(source: tuple[Vertex, ...], target: tuple[Verte
 
     if not source or not target:
         return math.inf
-    return max(_directed_hausdorff(source, target), _directed_hausdorff(target, source))
+    normalized_source = _normalize_points(source)
+    normalized_target = _normalize_points(target)
+    return max(_directed_hausdorff(normalized_source, normalized_target), _directed_hausdorff(normalized_target, normalized_source))
 
 
 def volumetric_accuracy(build: PhysicsBuild, target_mesh: Mesh, distance: float | None = None) -> float:
@@ -165,11 +167,11 @@ def volumetric_accuracy(build: PhysicsBuild, target_mesh: Mesh, distance: float 
     if not build.nodes or not target_mesh.vertices:
         return 0.0
     error = hausdorff_distance(build, target_mesh) if distance is None else distance
-    lower, upper = target_mesh.bounds()
+    lower, upper = Mesh(vertices=_normalize_points(target_mesh.vertices), faces=(), source="normalized_accuracy").bounds()
     diagonal = math.sqrt((upper.x - lower.x) ** 2 + (upper.y - lower.y) ** 2 + (upper.z - lower.z) ** 2)
     if diagonal <= 0:
         return 0.0
-    return max(0.0, min(1.0, 1.0 - (error / diagonal)))
+    return max(0.0, min(1.0, 1.0 - (error / (diagonal * 2.0))))
 
 
 def _add_neighbor_springs(
@@ -259,6 +261,14 @@ def _integrate_nodes(nodes: list[PhysicsNode], forces: list[Vertex], config: Sim
 
 def _directed_hausdorff(first: tuple[Vertex, ...], second: tuple[Vertex, ...]) -> float:
     return max(min(_distance(a, b) for b in second) for a in first)
+
+
+def _normalize_points(points: tuple[Vertex, ...]) -> tuple[Vertex, ...]:
+    lower = Vertex(min(point.x for point in points), min(point.y for point in points), min(point.z for point in points))
+    upper = Vertex(max(point.x for point in points), max(point.y for point in points), max(point.z for point in points))
+    center = Vertex((lower.x + upper.x) / 2.0, (lower.y + upper.y) / 2.0, (lower.z + upper.z) / 2.0)
+    span = max(upper.x - lower.x, upper.y - lower.y, upper.z - lower.z, 1e-9)
+    return tuple(Vertex((point.x - center.x) / span, (point.y - center.y) / span, (point.z - center.z) / span) for point in points)
 
 
 def _node_center(nodes: list[PhysicsNode]) -> Vertex:

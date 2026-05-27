@@ -40,7 +40,7 @@ class Phase3PhysicsTests(unittest.TestCase):
 
     def test_hausdorff_distance_is_zero_for_identical_points_and_positive_for_shifted_points(self):
         points = (Vertex(0.0, 0.0, 0.0), Vertex(1.0, 0.0, 0.0), Vertex(0.0, 1.0, 0.0))
-        shifted = (Vertex(1.0, 0.0, 0.0), Vertex(2.0, 0.0, 0.0), Vertex(1.0, 1.0, 0.0))
+        shifted = (Vertex(1.0, 0.0, 0.0), Vertex(2.0, 0.0, 0.0), Vertex(1.0, 2.0, 0.0))
 
         self.assertEqual(calculate_hausdorff_distance(points, points), 0.0)
         self.assertGreater(calculate_hausdorff_distance(points, shifted), 0.0)

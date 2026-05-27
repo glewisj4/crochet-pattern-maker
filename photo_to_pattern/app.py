@@ -10,6 +10,14 @@ from .pattern_linguist.models import PatternSection
 from .qa_simulation import PatternQASimulator, QAReport
 from .image_regions import CharacterAnalysis, CharacterRegionAnalyzer, ColorRegion
 from .image_regions.shape_fit import segment_axis
+from .integration import (
+    RefinementReport,
+    RuntimeDashboardSnapshot,
+    build_runtime_dashboard_snapshot,
+    refine_pattern_until_accuracy,
+    target_mesh_from_pattern,
+    target_mesh_from_voxel_model,
+)
 from .vision_voxelizer import ImageFrame, LimbOcclusion, Primitive3D, Vec2, Vec3, VisionVoxelizer, VoxelModel
 from .planning.models import PlanningModel
 
@@ -21,6 +29,8 @@ class AppResult:
     crochet_pattern: CrochetPattern
     qa_report: QAReport
     character_analysis: CharacterAnalysis | None = None
+    refinement_report: RefinementReport | None = None
+    dashboard_snapshot: RuntimeDashboardSnapshot | None = None
 
     def render(self) -> str:
         return "\n\n".join(
@@ -57,22 +67,27 @@ class PhotoToPatternApp:
         image_path: str | Path,
         planning_model: PlanningModel,
         title: str = "Photo-to-Amigurumi Pattern",
+        virtual_build_path: str | Path | None = None,
     ) -> AppResult:
         analysis = self.regions.analyze(image_path)
         voxel_model = _voxel_model_from_analysis(analysis)
         if not voxel_model.primitives:
             voxel_model = self.vision.process(image_path)
-        pattern_map = generate_planned_part_pattern_map(planning_model, self.geometry.config)
-        crochet_pattern = self.formatter.format(pattern_map, title=title)
+        target_mesh = target_mesh_from_voxel_model(voxel_model)
+        pattern_map = self._refine_pattern_map(generate_planned_part_pattern_map(planning_model, self.geometry.config), target_mesh)
+        crochet_pattern = self.formatter.format(pattern_map, title=title, planning_model=planning_model)
         crochet_pattern = _with_planned_part_sections(crochet_pattern, planning_model)
         crochet_pattern = _with_surface_detail_section(crochet_pattern, analysis)
-        qa_report = self.qa.evaluate(pattern_map, voxel_model)
+        qa_report = self.qa.evaluate(pattern_map, voxel_model, planning_model)
+        refinement_report, dashboard_snapshot = self._runtime_reports(pattern_map, target_mesh, virtual_build_path=virtual_build_path)
         return AppResult(
             voxel_model=voxel_model,
             pattern_map=pattern_map,
             crochet_pattern=crochet_pattern,
             qa_report=qa_report,
             character_analysis=analysis,
+            refinement_report=refinement_report,
+            dashboard_snapshot=dashboard_snapshot,
         )
 
     def _complete(
@@ -81,18 +96,37 @@ class PhotoToPatternApp:
         title: str,
         character_analysis: CharacterAnalysis | None = None,
     ) -> AppResult:
-        pattern_map = self.geometry.generate(voxel_model)
+        target_mesh = target_mesh_from_voxel_model(voxel_model)
+        pattern_map = self._refine_pattern_map(self.geometry.generate(voxel_model), target_mesh)
         crochet_pattern = self.formatter.format(pattern_map, title=title)
         if character_analysis is not None:
             crochet_pattern = _with_surface_detail_section(crochet_pattern, character_analysis)
         qa_report = self.qa.evaluate(pattern_map, voxel_model)
+        refinement_report, dashboard_snapshot = self._runtime_reports(pattern_map, target_mesh)
         return AppResult(
             voxel_model=voxel_model,
             pattern_map=pattern_map,
             crochet_pattern=crochet_pattern,
             qa_report=qa_report,
             character_analysis=character_analysis,
+            refinement_report=refinement_report,
+            dashboard_snapshot=dashboard_snapshot,
         )
+
+    def _refine_pattern_map(self, pattern_map: PatternMap, target_mesh=None) -> PatternMap:
+        target_mesh = target_mesh or target_mesh_from_pattern(pattern_map)
+        return refine_pattern_until_accuracy(pattern_map, target_mesh, accuracy_target=0.90).pattern_map
+
+    def _runtime_reports(
+        self,
+        pattern_map: PatternMap,
+        target_mesh=None,
+        virtual_build_path: str | Path | None = None,
+    ) -> tuple[RefinementReport, RuntimeDashboardSnapshot]:
+        target_mesh = target_mesh or target_mesh_from_pattern(pattern_map)
+        refinement_report = refine_pattern_until_accuracy(pattern_map, target_mesh, accuracy_target=0.90)
+        dashboard_snapshot = build_runtime_dashboard_snapshot(pattern_map, refinement_report.simulation_report, virtual_build_path=virtual_build_path)
+        return refinement_report, dashboard_snapshot
 
 
 def _with_surface_detail_section(
