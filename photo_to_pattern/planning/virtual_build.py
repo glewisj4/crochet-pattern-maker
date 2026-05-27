@@ -2,12 +2,311 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, replace
 from pathlib import Path
 import math
 
 from PIL import Image, ImageDraw, ImageFont
 
+from photo_to_pattern.core import Mesh, Vertex
+from photo_to_pattern.geometric_math import PatternMap, RoundSpec
+
 from .models import ConstructionPiece, DesignDetail, DesignPart, PlanningModel
+
+
+STITCH_HEIGHT_TO_WIDTH = 0.8
+
+
+@dataclass(frozen=True)
+class PhysicsNode:
+    id: str
+    part_id: str
+    round_number: int
+    stitch_index: int
+    position: Vertex
+    velocity: Vertex = Vertex(0.0, 0.0, 0.0)
+    mass: float = 1.0
+
+
+@dataclass(frozen=True)
+class PhysicsSpring:
+    source: int
+    target: int
+    rest_length: float
+    stiffness: float
+    damping: float
+    kind: str
+
+
+@dataclass(frozen=True)
+class PhysicsBuild:
+    nodes: tuple[PhysicsNode, ...]
+    springs: tuple[PhysicsSpring, ...]
+    target_mesh: Mesh | None = None
+
+    def bounds(self) -> tuple[Vertex, Vertex]:
+        if not self.nodes:
+            raise ValueError("Cannot calculate bounds for an empty physics build.")
+        xs = [node.position.x for node in self.nodes]
+        ys = [node.position.y for node in self.nodes]
+        zs = [node.position.z for node in self.nodes]
+        return Vertex(min(xs), min(ys), min(zs)), Vertex(max(xs), max(ys), max(zs))
+
+
+@dataclass(frozen=True)
+class SimulationConfig:
+    stitch_width: float = 1.0
+    stitch_height_ratio: float = STITCH_HEIGHT_TO_WIDTH
+    spring_stiffness: float = 0.18
+    shear_stiffness: float = 0.32
+    damping: float = 0.72
+    stuffing_pressure: float = 0.035
+    time_step: float = 0.16
+    iterations: int = 40
+
+
+@dataclass(frozen=True)
+class SimulationReport:
+    build: PhysicsBuild
+    hausdorff_distance: float
+    accuracy: float
+    iterations: int
+
+
+def build_mass_spring_model(pattern_map: PatternMap, config: SimulationConfig | None = None) -> PhysicsBuild:
+    """Create anisotropic stitch nodes and spring constraints from round specs."""
+
+    active_config = config or SimulationConfig()
+    nodes: list[PhysicsNode] = []
+    springs: list[PhysicsSpring] = []
+    node_index_by_key: dict[tuple[str, int, int], int] = {}
+    rounds_by_part: dict[str, list[RoundSpec]] = {}
+    for round_spec in pattern_map.rounds:
+        rounds_by_part.setdefault(round_spec.primitive_id, []).append(round_spec)
+
+    for part_offset, (part_id, rounds) in enumerate(sorted(rounds_by_part.items())):
+        sorted_rounds = sorted(rounds, key=lambda item: item.round_number)
+        max_stitches = max((round_spec.stitch_count for round_spec in sorted_rounds), default=1)
+        for round_offset, round_spec in enumerate(sorted_rounds):
+            radius = max(active_config.stitch_width, (round_spec.stitch_count / max_stitches) * max_stitches / (2.0 * math.pi))
+            z = round_offset * active_config.stitch_width * active_config.stitch_height_ratio
+            z -= (len(sorted_rounds) - 1) * active_config.stitch_width * active_config.stitch_height_ratio / 2.0
+            for stitch_index in range(1, round_spec.stitch_count + 1):
+                angle = 2.0 * math.pi * (stitch_index - 1) / max(1, round_spec.stitch_count)
+                node = PhysicsNode(
+                    id=f"{part_id}:R{round_spec.round_number}:S{stitch_index}",
+                    part_id=part_id,
+                    round_number=round_spec.round_number,
+                    stitch_index=stitch_index,
+                    position=Vertex(
+                        math.cos(angle) * radius + part_offset * max_stitches * 0.05,
+                        math.sin(angle) * radius,
+                        z,
+                    ),
+                )
+                node_index_by_key[(part_id, round_spec.round_number, stitch_index)] = len(nodes)
+                nodes.append(node)
+
+        for round_spec in sorted_rounds:
+            _add_neighbor_springs(round_spec, node_index_by_key, springs, active_config)
+            if round_spec.previous_stitch_count:
+                _add_worked_springs(round_spec, node_index_by_key, springs, active_config)
+                _add_shear_springs(round_spec, node_index_by_key, springs, active_config)
+
+    return PhysicsBuild(nodes=tuple(nodes), springs=tuple(springs))
+
+
+def simulate_virtual_physics(
+    pattern_map: PatternMap,
+    target_mesh: Mesh | None = None,
+    config: SimulationConfig | None = None,
+) -> SimulationReport:
+    """Relax a pattern-derived mass-spring model under stuffing pressure."""
+
+    active_config = config or SimulationConfig()
+    build = build_mass_spring_model(pattern_map, active_config)
+    if not build.nodes:
+        return SimulationReport(build=PhysicsBuild((), (), target_mesh), hausdorff_distance=math.inf, accuracy=0.0, iterations=0)
+
+    nodes = list(build.nodes)
+    for _ in range(active_config.iterations):
+        forces = [Vertex(0.0, 0.0, 0.0) for _ in nodes]
+        for spring in build.springs:
+            _apply_spring_force(nodes, forces, spring)
+        _apply_stuffing_sdf_pressure(nodes, forces, active_config)
+        nodes = _integrate_nodes(nodes, forces, active_config)
+
+    relaxed = PhysicsBuild(nodes=tuple(nodes), springs=build.springs, target_mesh=target_mesh)
+    distance = hausdorff_distance(relaxed, target_mesh) if target_mesh is not None else 0.0
+    accuracy = volumetric_accuracy(relaxed, target_mesh, distance) if target_mesh is not None else 1.0
+    return SimulationReport(relaxed, distance, accuracy, active_config.iterations)
+
+
+def hausdorff_distance(build: PhysicsBuild, target_mesh: Mesh) -> float:
+    """Calculate symmetric Hausdorff distance between build nodes and mesh vertices."""
+
+    if not build.nodes or not target_mesh.vertices:
+        return math.inf
+    node_points = tuple(node.position for node in build.nodes)
+    return calculate_hausdorff_distance(node_points, target_mesh.vertices)
+
+
+def calculate_hausdorff_distance(source: tuple[Vertex, ...], target: tuple[Vertex, ...]) -> float:
+    """Calculate symmetric nearest-neighbor Hausdorff distance between point clouds."""
+
+    if not source or not target:
+        return math.inf
+    return max(_directed_hausdorff(source, target), _directed_hausdorff(target, source))
+
+
+def volumetric_accuracy(build: PhysicsBuild, target_mesh: Mesh, distance: float | None = None) -> float:
+    """Return an accuracy score in [0, 1] from Hausdorff error and target scale."""
+
+    if not build.nodes or not target_mesh.vertices:
+        return 0.0
+    error = hausdorff_distance(build, target_mesh) if distance is None else distance
+    lower, upper = target_mesh.bounds()
+    diagonal = math.sqrt((upper.x - lower.x) ** 2 + (upper.y - lower.y) ** 2 + (upper.z - lower.z) ** 2)
+    if diagonal <= 0:
+        return 0.0
+    return max(0.0, min(1.0, 1.0 - (error / diagonal)))
+
+
+def _add_neighbor_springs(
+    round_spec: RoundSpec,
+    node_lookup: dict[tuple[str, int, int], int],
+    springs: list[PhysicsSpring],
+    config: SimulationConfig,
+) -> None:
+    count = round_spec.stitch_count
+    if count <= 1:
+        return
+    rest = config.stitch_width
+    for stitch_index in range(1, count + 1):
+        source = node_lookup[(round_spec.primitive_id, round_spec.round_number, stitch_index)]
+        target = node_lookup[(round_spec.primitive_id, round_spec.round_number, (stitch_index % count) + 1)]
+        springs.append(PhysicsSpring(source, target, rest, config.shear_stiffness, config.damping, "round_neighbor"))
+
+
+def _add_worked_springs(
+    round_spec: RoundSpec,
+    node_lookup: dict[tuple[str, int, int], int],
+    springs: list[PhysicsSpring],
+    config: SimulationConfig,
+) -> None:
+    for stitch_index in range(1, round_spec.stitch_count + 1):
+        previous_index = max(1, min(round_spec.previous_stitch_count, round((stitch_index - 0.5) * round_spec.previous_stitch_count / round_spec.stitch_count + 0.5)))
+        source = node_lookup[(round_spec.primitive_id, round_spec.round_number - 1, previous_index)]
+        target = node_lookup[(round_spec.primitive_id, round_spec.round_number, stitch_index)]
+        springs.append(PhysicsSpring(source, target, config.stitch_width * config.stitch_height_ratio, config.spring_stiffness, config.damping, "worked_into"))
+
+
+def _add_shear_springs(
+    round_spec: RoundSpec,
+    node_lookup: dict[tuple[str, int, int], int],
+    springs: list[PhysicsSpring],
+    config: SimulationConfig,
+) -> None:
+    rest = math.sqrt(config.stitch_width**2 + (config.stitch_width * config.stitch_height_ratio) ** 2)
+    for stitch_index in range(1, round_spec.stitch_count + 1):
+        previous_index = max(1, min(round_spec.previous_stitch_count, round((stitch_index - 0.5) * round_spec.previous_stitch_count / round_spec.stitch_count + 0.5)))
+        diagonal_index = (previous_index % round_spec.previous_stitch_count) + 1
+        source = node_lookup[(round_spec.primitive_id, round_spec.round_number - 1, diagonal_index)]
+        target = node_lookup[(round_spec.primitive_id, round_spec.round_number, stitch_index)]
+        springs.append(PhysicsSpring(source, target, rest, config.shear_stiffness, config.damping, "shear"))
+
+
+def _apply_spring_force(nodes: list[PhysicsNode], forces: list[Vertex], spring: PhysicsSpring) -> None:
+    source = nodes[spring.source]
+    target = nodes[spring.target]
+    delta = _v_sub(target.position, source.position)
+    length = _v_length(delta)
+    if length <= 1e-9:
+        return
+    direction = _v_scale(delta, 1.0 / length)
+    relative_velocity = _v_sub(target.velocity, source.velocity)
+    spring_force = spring.stiffness * (length - spring.rest_length)
+    damping_force = spring.damping * _v_dot(relative_velocity, direction) * 0.01
+    force = _v_scale(direction, spring_force + damping_force)
+    forces[spring.source] = _v_add(forces[spring.source], force)
+    forces[spring.target] = _v_sub(forces[spring.target], force)
+
+
+def _apply_stuffing_sdf_pressure(nodes: list[PhysicsNode], forces: list[Vertex], config: SimulationConfig) -> None:
+    center = _node_center(nodes)
+    radii = _node_radii(nodes, center)
+    for index, node in enumerate(nodes):
+        normalized = Vertex(
+            (node.position.x - center.x) / radii.x,
+            (node.position.y - center.y) / radii.y,
+            (node.position.z - center.z) / radii.z,
+        )
+        distance = _v_length(normalized) - 1.0
+        direction = _v_normalize(_v_sub(node.position, center))
+        pressure = config.stuffing_pressure * max(0.05, 1.0 - distance)
+        forces[index] = _v_add(forces[index], _v_scale(direction, pressure))
+
+
+def _integrate_nodes(nodes: list[PhysicsNode], forces: list[Vertex], config: SimulationConfig) -> list[PhysicsNode]:
+    integrated: list[PhysicsNode] = []
+    for node, force in zip(nodes, forces):
+        acceleration = _v_scale(force, 1.0 / max(1e-9, node.mass))
+        velocity = _v_scale(_v_add(node.velocity, _v_scale(acceleration, config.time_step)), config.damping)
+        position = _v_add(node.position, _v_scale(velocity, config.time_step))
+        integrated.append(replace(node, position=position, velocity=velocity))
+    return integrated
+
+
+def _directed_hausdorff(first: tuple[Vertex, ...], second: tuple[Vertex, ...]) -> float:
+    return max(min(_distance(a, b) for b in second) for a in first)
+
+
+def _node_center(nodes: list[PhysicsNode]) -> Vertex:
+    count = max(1, len(nodes))
+    return Vertex(
+        sum(node.position.x for node in nodes) / count,
+        sum(node.position.y for node in nodes) / count,
+        sum(node.position.z for node in nodes) / count,
+    )
+
+
+def _node_radii(nodes: list[PhysicsNode], center: Vertex) -> Vertex:
+    return Vertex(
+        max(0.5, max(abs(node.position.x - center.x) for node in nodes)),
+        max(0.5, max(abs(node.position.y - center.y) for node in nodes)),
+        max(0.5, max(abs(node.position.z - center.z) for node in nodes)),
+    )
+
+
+def _distance(first: Vertex, second: Vertex) -> float:
+    return _v_length(_v_sub(first, second))
+
+
+def _v_add(first: Vertex, second: Vertex) -> Vertex:
+    return Vertex(first.x + second.x, first.y + second.y, first.z + second.z)
+
+
+def _v_sub(first: Vertex, second: Vertex) -> Vertex:
+    return Vertex(first.x - second.x, first.y - second.y, first.z - second.z)
+
+
+def _v_scale(value: Vertex, scale: float) -> Vertex:
+    return Vertex(value.x * scale, value.y * scale, value.z * scale)
+
+
+def _v_dot(first: Vertex, second: Vertex) -> float:
+    return first.x * second.x + first.y * second.y + first.z * second.z
+
+
+def _v_length(value: Vertex) -> float:
+    return math.sqrt(_v_dot(value, value))
+
+
+def _v_normalize(value: Vertex) -> Vertex:
+    length = _v_length(value)
+    if length <= 1e-9:
+        return Vertex(0.0, 0.0, 1.0)
+    return _v_scale(value, 1.0 / length)
 
 
 def render_virtual_build(
