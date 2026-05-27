@@ -14,12 +14,17 @@ Phase 1 verification recorded 2026-05-26:
 - Reviewer gate passed after confirming independent front/side silhouette constraints in the mesh builder.
 
 ## Phase 2: Differential Topology & Grammar Compliance
-- [ ] Write the mesh mapping logic calculating local Gaussian curvature fields ($K$).
-- [ ] Implement bifurcation segmentation logic to separate appendages from primary structural torsos.
-- [ ] Define strict validation parsing rules for the intermediate crochet assembly grammar (`.cr`).
-- [ ] Write automated pattern correction loops that apply staggered increase intervals to prevent hexagonal geometric artifacting.
-- [ ] Implement the stitch-drift/spiral-torque tracking algorithm that injects alignment offset stitches dynamically.
-- [ ] Add verification test suite checking row-by-row math connectivity under `tests/test_compiler.py`.
+- [x] Write the mesh mapping logic calculating local Gaussian curvature fields ($K$).
+- [x] Implement bifurcation segmentation logic to separate appendages from primary structural torsos.
+- [x] Define strict validation parsing rules for the intermediate crochet assembly grammar (`.cr`).
+- [x] Write automated pattern correction loops that apply staggered increase intervals to prevent hexagonal geometric artifacting.
+- [x] Implement the stitch-drift/spiral-torque tracking algorithm that injects alignment offset stitches dynamically.
+- [x] Add verification test suite checking row-by-row math connectivity under `tests/test_compiler.py`.
+
+Phase 2 verification recorded 2026-05-26:
+- `python -m unittest tests.test_compiler` passed, 12 tests OK.
+- `python -m unittest discover -s tests` passed, 94 tests OK.
+- Reviewer gate passed after strict offset metadata, parser ordering, drift injection, and bifurcation segmentation corrections.
 
 ## Phase 3: Mass-Spring Physics Relaxation Simulation
 - [ ] Implement the mass-spring physics engine framework inside `planning/virtual_build.py`.
