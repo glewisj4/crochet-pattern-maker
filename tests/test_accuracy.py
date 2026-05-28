@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from PIL import Image, ImageDraw
 
@@ -9,6 +10,7 @@ from photo_to_pattern.accuracy import build_accuracy_report
 from photo_to_pattern.app import AppResult, PhotoToPatternApp
 from photo_to_pattern.geometric_math import PatternMap
 from photo_to_pattern.planning import PlanningOrchestrator
+from photo_to_pattern.planning.gemini_adapter import GeminiAdapter
 from photo_to_pattern.planning.models import ConstructionPiece, DesignDetail, DesignPart, PlanningModel, PlanningOptions, PlanningView
 from photo_to_pattern.pattern_linguist import CrochetPattern
 from photo_to_pattern.qa_simulation import PatternQASimulator
@@ -19,7 +21,12 @@ class AccuracyReportTests(unittest.TestCase):
     def test_builds_accuracy_report_for_generated_plan(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             source = _source_image(Path(temp_dir) / "front.png")
-            planning = PlanningOrchestrator(work_root=Path(temp_dir) / "plans").create_from_images([source], title="fox")
+            with patch.object(GeminiAdapter, "analyze_character", return_value=_gemini_payload()):
+                planning = PlanningOrchestrator(work_root=Path(temp_dir) / "plans").create_from_images(
+                    [source],
+                    title="fox",
+                    options=PlanningOptions(gemini_api_key="test-key"),
+                )
             result = PhotoToPatternApp().from_image_with_plan(source, planning.model, title="fox")
 
             report = build_accuracy_report(planning, result)
@@ -207,6 +214,20 @@ def _source_image(path: Path) -> Path:
     draw.rectangle((78, 132, 142, 250), fill=(230, 125, 52, 255))
     image.save(path)
     return path
+
+
+def _gemini_payload() -> dict:
+    return {
+        "parts": [
+            {"name": "Head", "category": "Primary Body", "primitive": "sphere", "relative_size": [0.50, 0.36, 0.40], "color_hex": "#e67d34", "attachment": "above body", "confidence": 0.94},
+            {"name": "Body", "category": "Primary Body", "primitive": "ovoid", "relative_size": [0.44, 0.62, 0.32], "color_hex": "#e67d34", "attachment": "root", "confidence": 0.93},
+            {"name": "Ears", "category": "Insets", "primitive": "inset_ear", "relative_size": [0.22, 0.34, 0.12], "color_hex": "#e67d34", "attachment": "top head", "confidence": 0.91},
+            {"name": "Tail", "category": "Appendages", "primitive": "curled_tail", "relative_size": [0.24, 0.50, 0.19], "color_hex": "#8b512b", "attachment": "back body", "confidence": 0.90},
+        ],
+        "details": [
+            {"name": "Snout/muzzle", "category": "Accents", "method": "crochet applique snout", "placement": "lower front face", "color_hex": "#eed3b2", "confidence": 0.89},
+        ],
+    }
 
 
 if __name__ == "__main__":

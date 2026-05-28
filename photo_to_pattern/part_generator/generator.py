@@ -7,10 +7,18 @@ from math import ceil
 from photo_to_pattern.geometric_math import GeometricConfig, PatternMap, RoundSpec
 from photo_to_pattern.geometric_math.staggering import stagger_positions
 from photo_to_pattern.planning.models import DesignPart, PlanningModel
+from photo_to_pattern.compiler.generators import (
+    closed_capsule_profile,
+    closed_ovoid_profile,
+    curled_tapered_tail_profile,
+    eccentric_oval_muzzle_profile,
+    inset_ear_profiles,
+    leaf_cloak_panel_rows,
+)
 
 
-class PlannedPartPatternGenerator:
-    """Generate round maps for every crocheted planned part."""
+class StitchSynthesisAgent:
+    """Deterministic stitch algebra compiler mapping planning shapes to strict spiral rounds."""
 
     def __init__(self, config: GeometricConfig | None = None) -> None:
         self.config = config or GeometricConfig()
@@ -25,10 +33,25 @@ class PlannedPartPatternGenerator:
             for index in range(1, quantity + 1):
                 part_id = _part_id(part, index if quantity > 1 else None)
                 profile = _profile_for_part(part, model, self.config)
+                # Enforce clean algebraic rules with no prose or conversational text
                 rounds.extend(_rounds_from_profile(part_id, profile, self.config, _note_for_part(part)))
+                if _is_inset_ear(part):
+                    _outer, inner = inset_ear_profiles(len(profile), max(profile), self.config)
+                    rounds.extend(
+                        _rounds_from_profile(
+                            f"{part_id}_inner_inset",
+                            inner,
+                            self.config,
+                            f"Flat inset applique for {part.name}; sew inside outer ear after blocking.",
+                        )
+                    )
             if part.confidence < 0.35:
                 warnings.append(f"{part.name}: inferred planned part; confirm shape and attachment before crocheting.")
         return PatternMap(rounds=tuple(rounds), warnings=tuple(warnings))
+
+
+class PlannedPartPatternGenerator(StitchSynthesisAgent):
+    """Backward-compatible name for the StitchSynthesisAgent."""
 
 
 def generate_planned_part_pattern_map(
@@ -40,14 +63,24 @@ def generate_planned_part_pattern_map(
 
 def _profile_for_part(part: DesignPart, model: PlanningModel, config: GeometricConfig) -> tuple[int, ...]:
     primitive = part.primitive.lower()
+    name = part.name.lower()
     height_inches = _part_height_inches(part, model)
     rounds = max(config.min_rounds_per_primitive, min(config.max_rounds_per_primitive, ceil(height_inches * model.options.stitches_per_inch / config.stitch_aspect_height)))
     peak = _peak_stitches(part, model, config)
+    if "tail" in name or "curled_tail" in primitive or "tapered" in primitive:
+        return curled_tapered_tail_profile(rounds, peak, config)
+    if "ear" in name or "inset_ear" in primitive:
+        outer, _inner = inset_ear_profiles(rounds, peak, config)
+        return outer
+    if "muzzle" in name or "snout" in name or "eccentric_oval" in primitive:
+        return eccentric_oval_muzzle_profile(max(4, rounds // 2), peak, config)
+    if "leaf" in name or "cloak" in name or "garment" in part.category.lower() or "flat_panel" in primitive:
+        return leaf_cloak_panel_rows(max(5, rounds // 2), peak, config)
     if "cone" in primitive:
         return _cone_profile(rounds, peak, config)
     if "cylinder" in primitive or "capsule" in primitive:
-        return _capsule_profile(rounds, peak, config) if "capsule" in primitive else _cylinder_profile(rounds, peak, config)
-    return _ovoid_profile(rounds, peak, config)
+        return closed_capsule_profile(rounds, peak, config)
+    return closed_ovoid_profile(rounds, peak, config)
 
 
 def _rounds_from_profile(
@@ -111,7 +144,8 @@ def _cylinder_profile(rounds: int, peak: int, config: GeometricConfig) -> tuple[
     cap_rounds = max(2, min(ceil((peak - config.min_stitches) / config.max_delta_per_round) + 1, rounds // 2))
     counts = _ramp(config.min_stitches, peak, cap_rounds)
     counts.extend([peak] * max(0, rounds - len(counts)))
-    return tuple(counts[:rounds])
+    counts.extend(_ramp(peak, config.min_stitches, cap_rounds + 1)[1:])
+    return tuple(counts[:rounds + cap_rounds])
 
 
 def _capsule_profile(rounds: int, peak: int, config: GeometricConfig) -> tuple[int, ...]:
@@ -174,6 +208,8 @@ def _part_id(part: DesignPart, index: int | None) -> str:
 
 
 def _note_for_part(part: DesignPart) -> str:
+    if "leaf" in part.name.lower() or "cloak" in part.name.lower() or "garment" in part.category.lower() or "flat_panel" in part.primitive.lower():
+        return f"Flat panel rows. Attachment: {part.attachment}. Source: {part.source}."
     return f"Attachment: {part.attachment}. Source: {part.source}."
 
 
@@ -192,6 +228,11 @@ def _phase(index: int, total: int, delta: int) -> str:
 def _is_surface_detail(part: DesignPart) -> bool:
     primitive = part.primitive.lower()
     return "detail" in primitive or "applique" in primitive or "embroidery" in primitive
+
+
+def _is_inset_ear(part: DesignPart) -> bool:
+    primitive = part.primitive.lower()
+    return "ear" in part.name.lower() or "inset_ear" in primitive
 
 
 def _quantity_for_part(part: DesignPart, model: PlanningModel) -> int:

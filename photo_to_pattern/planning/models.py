@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 ViewKind = Literal["front", "side", "back", "top", "unknown"]
+SemanticCategory = Literal["Primary Body", "Accents", "Appendages", "Overlaid Garments", "Facial Embroidery", "Insets"]
 
 
 @dataclass(frozen=True)
@@ -18,6 +20,10 @@ class PlanningOptions:
     limb_scale: float = 1.0
     detail_scale: float = 1.0
     reimagine_as_amigurumi: bool = False
+    infant_safe: bool = False
+    gemini_api_key: str = ""
+    aesthetic_style: str = "classic"
+
 
 
 @dataclass(frozen=True)
@@ -61,6 +67,12 @@ class DesignPart:
     attachment: str
     source: str
     confidence: float
+    pose_position: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    rotation_degrees: float = 0.0
+    yarn_type: str = "acrylic"
+    color_hex: str = "#e87e40"
+    category: SemanticCategory = "Primary Body"
+
 
 
 @dataclass(frozen=True)
@@ -71,6 +83,12 @@ class DesignDetail:
     color: tuple[int, int, int] | None
     source: str
     confidence: float
+    pose_position: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    rotation_degrees: float = 0.0
+    yarn_type: str = "acrylic"
+    color_hex: str = "#e87e40"
+    category: SemanticCategory = "Accents"
+
 
 
 @dataclass(frozen=True)
@@ -112,3 +130,30 @@ class PlanningResult:
     work_dir: Path
     model_json_path: Path | None = None
     virtual_build_path: Path | None = None
+
+
+def snap_part_to_parent(
+    part_pos: tuple[float, float, float],
+    parent_pos: tuple[float, float, float],
+    parent_w: float,
+    parent_h: float,
+) -> tuple[float, float, float]:
+    """Snap a limb part position to stay within a maximum boundary from its parent center."""
+    px, py, pz = part_pos
+    parent_x, parent_y, _ = parent_pos
+
+    dx = px - parent_x
+    dy = py - parent_y
+    dist = math.sqrt(dx * dx + dy * dy)
+
+    r = 1.5 * max(parent_w, parent_h)
+    if dist > r:
+        if dist == 0:
+            return (parent_x, parent_y, pz)
+        ux = dx / dist
+        uy = dy / dist
+        new_x = parent_x + ux * r
+        new_y = parent_y + uy * r
+        return (new_x, new_y, pz)
+
+    return (px, py, pz)

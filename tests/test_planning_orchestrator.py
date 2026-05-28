@@ -2,11 +2,34 @@ import tempfile
 import unittest
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 from PIL import Image, ImageDraw
 
+from photo_to_pattern.planning.gemini_adapter import GeminiAdapter, GeminiVisionError
 from photo_to_pattern.planning import PlanningOrchestrator
 from photo_to_pattern.planning.models import PlanningOptions
+
+
+def _gemini_payload() -> dict:
+    return {
+        "parts": [
+            {"name": "Head", "category": "Primary Body", "primitive": "sphere", "relative_size": [0.50, 0.36, 0.40], "color_hex": "#e67d34", "attachment": "above body", "confidence": 0.94},
+            {"name": "Body", "category": "Primary Body", "primitive": "ovoid", "relative_size": [0.44, 0.62, 0.32], "color_hex": "#e67d34", "attachment": "root", "confidence": 0.93},
+            {"name": "Legs", "category": "Appendages", "primitive": "capsule", "relative_size": [0.12, 0.22, 0.10], "color_hex": "#e67d34", "attachment": "lower body", "confidence": 0.90},
+            {"name": "Arms", "category": "Appendages", "primitive": "capsule", "relative_size": [0.08, 0.18, 0.07], "color_hex": "#e67d34", "attachment": "body sides", "confidence": 0.89},
+            {"name": "Ears", "category": "Insets", "primitive": "inset_ear", "relative_size": [0.22, 0.34, 0.12], "color_hex": "#e67d34", "attachment": "top head", "confidence": 0.91},
+            {"name": "Tail", "category": "Appendages", "primitive": "curled_tail", "relative_size": [0.24, 0.50, 0.19], "color_hex": "#8b512b", "attachment": "back body", "confidence": 0.90},
+            {"name": "Leaf cloak/body wrap", "category": "Overlaid Garments", "primitive": "flat_panel", "relative_size": [0.72, 0.38, 0.04], "color_hex": "#568b4b", "attachment": "around shoulders", "confidence": 0.88},
+        ],
+        "details": [
+            {"name": "Snout/muzzle", "category": "Accents", "method": "crochet applique snout", "placement": "lower front face", "color_hex": "#eed3b2", "confidence": 0.89},
+            {"name": "Inner ears", "category": "Insets", "method": "small contrasting inner-ear appliques", "placement": "inside ears", "color_hex": "#eeae9a", "confidence": 0.88},
+            {"name": "Embroidered closed eyes", "category": "Facial Embroidery", "method": "two dark curved backstitch lines", "placement": "upper front head", "color_hex": "#231d1a", "confidence": 0.88},
+            {"name": "Leaf vein embroidery", "category": "Facial Embroidery", "method": "central vein and short branch veins", "placement": "on leaf cloak/body wrap", "color_hex": "#34532d", "confidence": 0.86},
+            {"name": "Tail color/detail", "category": "Accents", "method": "cream tail tip applique", "placement": "outer tail end", "color_hex": "#f2dcb9", "confidence": 0.86},
+        ],
+    }
 
 
 class PlanningOrchestratorTests(unittest.TestCase):
@@ -22,7 +45,12 @@ class PlanningOrchestratorTests(unittest.TestCase):
             draw.rectangle((138, 158, 165, 265), fill=(230, 125, 52, 255))
             image.save(source)
 
-            result = PlanningOrchestrator(work_root=root / "out").create_from_images([source], title="fox")
+            with patch.object(GeminiAdapter, "analyze_character", return_value=_gemini_payload()):
+                result = PlanningOrchestrator(work_root=root / "out").create_from_images(
+                    [source],
+                    title="fox",
+                    options=PlanningOptions(gemini_api_key="test-key"),
+                )
 
             self.assertTrue(result.card_path.exists())
             self.assertIsNotNone(result.virtual_build_path)
@@ -52,8 +80,9 @@ class PlanningOrchestratorTests(unittest.TestCase):
             draw.rectangle((90, 145, 150, 260), fill=(230, 125, 52, 255))
             image.save(source)
 
-            options = PlanningOptions(target_height_inches=12.0, stitches_per_inch=4.5, head_scale=1.25, body_scale=0.9, limb_scale=1.1, detail_scale=1.2)
-            result = PlanningOrchestrator(work_root=root / "out").create_from_images([source], title="fox", options=options)
+            options = PlanningOptions(target_height_inches=12.0, stitches_per_inch=4.5, head_scale=1.25, body_scale=0.9, limb_scale=1.1, detail_scale=1.2, gemini_api_key="test-key")
+            with patch.object(GeminiAdapter, "analyze_character", return_value=_gemini_payload()):
+                result = PlanningOrchestrator(work_root=root / "out").create_from_images([source], title="fox", options=options)
 
             self.assertEqual(result.model.options.target_height_inches, 12.0)
             self.assertEqual(result.model.options.stitches_per_inch, 4.5)
@@ -70,8 +99,9 @@ class PlanningOrchestratorTests(unittest.TestCase):
             draw.rectangle((82, 140, 138, 230), fill=(230, 125, 52, 255))
             image.save(source)
 
-            options = PlanningOptions(reimagine_as_amigurumi=True)
-            result = PlanningOrchestrator(work_root=root / "out").create_from_images([source], title="fox", options=options)
+            options = PlanningOptions(reimagine_as_amigurumi=True, gemini_api_key="test-key")
+            with patch.object(GeminiAdapter, "analyze_character", return_value=_gemini_payload()):
+                result = PlanningOrchestrator(work_root=root / "out").create_from_images([source], title="fox", options=options)
 
             self.assertTrue(result.model.options.reimagine_as_amigurumi)
             self.assertTrue((result.work_dir / "reimagined_views" / "upload_1_amigurumi_reference.png").exists())
@@ -104,7 +134,12 @@ class PlanningOrchestratorTests(unittest.TestCase):
             draw.polygon(((274, 188), (300, 176), (290, 208)), fill=(242, 220, 185, 255))
             image.save(source)
 
-            result = PlanningOrchestrator(work_root=root / "out").create_from_images([source], title="fox leaf")
+            with patch.object(GeminiAdapter, "analyze_character", return_value=_gemini_payload()):
+                result = PlanningOrchestrator(work_root=root / "out").create_from_images(
+                    [source],
+                    title="fox leaf",
+                    options=PlanningOptions(gemini_api_key="test-key"),
+                )
             detail_text = " ".join(f"{item.name} {item.method} {item.placement}" for item in result.model.details).lower()
             part_text = " ".join(f"{item.name} {item.primitive} {item.source}" for item in result.model.parts).lower()
             construction_names = {item.name for item in result.model.construction}
@@ -153,7 +188,12 @@ class PlanningOrchestratorTests(unittest.TestCase):
             draw.rectangle((560, 724, 1040, 741), fill=(0, 0, 0, 255))
             image.save(source)
 
-            result = PlanningOrchestrator(work_root=root / "out").create_from_images([source], title="sheet")
+            with patch.object(GeminiAdapter, "analyze_character", return_value=_gemini_payload()):
+                result = PlanningOrchestrator(work_root=root / "out").create_from_images(
+                    [source],
+                    title="sheet",
+                    options=PlanningOptions(gemini_api_key="test-key"),
+                )
 
             self.assertEqual({view.kind for view in result.model.views}, {"front", "side", "back", "top"})
             self.assertEqual(len([view for view in result.model.views if view.inferred]), 0)
@@ -171,6 +211,15 @@ class PlanningOrchestratorTests(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 PlanningOrchestrator(work_root=root / "out").create_from_images(paths)
+
+    def test_missing_gemini_key_aborts_without_local_fallback(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "front_character.png"
+            Image.new("RGBA", (260, 320), (255, 255, 255, 255)).save(source)
+
+            with self.assertRaises(GeminiVisionError):
+                PlanningOrchestrator(work_root=root / "out").create_from_images([source], title="fox")
 
 
 if __name__ == "__main__":
