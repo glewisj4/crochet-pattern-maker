@@ -37,6 +37,9 @@ class PhotoToPatternGUI(tk.Tk):
         self.detail_scale_var = tk.DoubleVar(value=1.0)
         self.reimagine_var = tk.BooleanVar(value=False)
         self.aesthetic_style_var = tk.StringVar(value="classic")
+        self.yarn_weight_var = tk.IntVar(value=4)
+        self.hook_size_var = tk.DoubleVar(value=3.5)
+        self.fiber_type_var = tk.StringVar(value="acrylic")
         self.image_path: Path | None = None
         self.image_paths: list[Path] = []
         self.crochet_source_path: Path | None = None
@@ -100,9 +103,24 @@ class PhotoToPatternGUI(tk.Tk):
             variable=self.reimagine_var,
         ).grid(row=7, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
+        yarn_settings = ttk.LabelFrame(sidebar, text="Yarn Physics", padding=10)
+        yarn_settings.grid(row=6, column=0, sticky="ew", pady=(14, 0))
+        yarn_settings.columnconfigure(1, weight=1)
+        ttk.Label(yarn_settings, text="Weight #").grid(row=0, column=0, sticky="w", pady=2)
+        ttk.Spinbox(yarn_settings, from_=1, to=7, increment=1, textvariable=self.yarn_weight_var, width=8, justify="right").grid(row=0, column=1, sticky="ew", pady=2)
+        _number_control(yarn_settings, "Hook mm", self.hook_size_var, 1, 0.5, 15.0, 0.25)
+        ttk.Label(yarn_settings, text="Fiber").grid(row=2, column=0, sticky="w", pady=2)
+        ttk.Combobox(
+            yarn_settings,
+            textvariable=self.fiber_type_var,
+            values=["acrylic", "cotton", "wool", "chenille", "velvet/chenille"],
+            state="readonly",
+            width=14,
+        ).grid(row=2, column=1, sticky="ew", pady=2)
+
         # Workspace Editing sub-panel
         self.workspace_frame = ttk.LabelFrame(sidebar, text="Workspace Editing", padding=10)
-        self.workspace_frame.grid(row=6, column=0, sticky="ew", pady=(14, 0))
+        self.workspace_frame.grid(row=7, column=0, sticky="ew", pady=(14, 0))
         self.workspace_frame.columnconfigure(1, weight=1)
 
         ttk.Label(self.workspace_frame, text="Part:").grid(row=0, column=0, sticky="w", pady=2)
@@ -135,15 +153,15 @@ class PhotoToPatternGUI(tk.Tk):
         self.apply_changes_btn.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(8, 2))
 
         self.status = ttk.Label(sidebar, text="Select 1 to 4 images to begin.", wraplength=260)
-        self.status.grid(row=7, column=0, sticky="ew", pady=(18, 4))
+        self.status.grid(row=8, column=0, sticky="ew", pady=(18, 4))
         self.phase = ttk.Label(sidebar, text="Phase: idle", wraplength=260)
-        self.phase.grid(row=8, column=0, sticky="ew", pady=(0, 6))
+        self.phase.grid(row=9, column=0, sticky="ew", pady=(0, 6))
         self.progress = ttk.Progressbar(sidebar, mode="indeterminate")
-        self.progress.grid(row=9, column=0, sticky="ew", pady=(0, 8))
+        self.progress.grid(row=10, column=0, sticky="ew", pady=(0, 8))
 
         details_frame = ttk.LabelFrame(sidebar, text="Detected Details", padding=10)
-        details_frame.grid(row=10, column=0, sticky="nsew", pady=(12, 0))
-        sidebar.rowconfigure(10, weight=1)
+        details_frame.grid(row=11, column=0, sticky="nsew", pady=(12, 0))
+        sidebar.rowconfigure(11, weight=1)
         self.details_text = tk.Text(details_frame, width=34, height=18, wrap="word", state="disabled")
         self.details_text.grid(row=0, column=0, sticky="nsew")
         details_frame.rowconfigure(0, weight=1)
@@ -635,6 +653,9 @@ class PhotoToPatternGUI(tk.Tk):
             detail_scale=max(0.5, self.detail_scale_var.get()),
             reimagine_as_amigurumi=self.reimagine_var.get(),
             aesthetic_style=self.aesthetic_style_var.get(),
+            yarn_weight=max(1, min(7, int(self.yarn_weight_var.get()))),
+            hook_size_mm=max(0.5, self.hook_size_var.get()),
+            fiber_type=self.fiber_type_var.get(),
         )
 
     def _set_phase_threadsafe(self, message: str) -> None:
@@ -686,6 +707,11 @@ def _details_summary(
         lines.append(f"- Planning model: {_percent(accuracy_report.planning_model_score)}")
         lines.append(f"- Crochet feasibility: {_percent(accuracy_report.crochet_feasibility_score)}")
         lines.append(f"- Virtual build/proof: {_percent(accuracy_report.virtual_build_score)}")
+    materials = _materials_lines(result)
+    if materials:
+        lines.append("")
+        lines.append("Yarn requirements:")
+        lines.extend(f"- {line}" for line in materials)
     if result.dashboard_snapshot is not None:
         lines.append("")
         lines.append("Physics dashboard:")
@@ -711,6 +737,12 @@ def _planning_summary(planning_result: PlanningResult, accuracy_report: Accuracy
         for part in planning_result.model.parts:
             lines.append(f"- {part.name}: {part.primitive}, attach {part.attachment}, confidence {part.confidence:.2f}")
         lines.append("")
+    lines.append(
+        f"Yarn physics: weight #{planning_result.model.options.yarn_weight}, "
+        f"{planning_result.model.options.hook_size_mm:.2f} mm hook, "
+        f"{planning_result.model.options.fiber_type} fiber."
+    )
+    lines.append("")
     lines.append("Construction pieces:")
     for piece in planning_result.model.construction:
         lines.append(f"- {piece.name} x{piece.quantity}: {piece.primitive} ({piece.round_hint})")
@@ -745,6 +777,13 @@ def _verification_summary(result: AppResult) -> str:
             scope += f" R{issue.round_number}"
         lines.append(f"- {issue.severity}: {scope}: {issue.message}")
     return "\n".join(lines)
+
+
+def _materials_lines(result: AppResult) -> list[str]:
+    section = next((item for item in result.crochet_pattern.sections if item.primitive_id == "yarn_materials_requirements"), None)
+    if section is None:
+        return []
+    return [line for line in section.lines if "Yarn" in line or "Hook" in line]
 
 
 def _number_control(

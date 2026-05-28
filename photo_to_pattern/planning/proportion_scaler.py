@@ -128,6 +128,7 @@ class ProportionScalingAgent:
                     confidence=confidence,
                     pose_position=position,
                     rotation_degrees=rotation,
+                    yarn_type=options.fiber_type,
                     category=category,
                 )
                 parts_list.append(dp)
@@ -149,6 +150,7 @@ class ProportionScalingAgent:
                     confidence=confidence,
                     pose_position=position,
                     rotation_degrees=rotation,
+                    yarn_type=options.fiber_type,
                     category=category,
                 )
                 details_list.append(dd)

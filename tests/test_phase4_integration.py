@@ -2,9 +2,10 @@ import unittest
 from pathlib import Path
 
 from photo_to_pattern.core import Face, Mesh, Vertex
-from photo_to_pattern.app import PhotoToPatternApp
+from photo_to_pattern.app import PhotoToPatternApp, _simulation_config_for_plan
 from photo_to_pattern.geometric_math import PatternMap, RoundSpec
 from photo_to_pattern.integration import build_runtime_dashboard_snapshot, refine_pattern_until_accuracy, target_mesh_from_pattern
+from photo_to_pattern.planning.models import PlanningModel, PlanningOptions
 from photo_to_pattern.planning.virtual_build import SimulationConfig, simulate_virtual_physics
 from photo_to_pattern.vision_voxelizer import ImageFrame
 
@@ -59,6 +60,17 @@ class Phase4IntegrationTests(unittest.TestCase):
         self.assertIsNotNone(result.dashboard_snapshot)
         self.assertGreaterEqual(result.refinement_report.simulation_report.accuracy, 0.90)
         self.assertGreater(result.dashboard_snapshot.node_count, 0)
+
+    def test_planning_options_feed_yarn_physics_config(self):
+        cotton_model = PlanningModel("cotton", PlanningOptions(yarn_weight=2, hook_size_mm=2.5, fiber_type="cotton"), (), (), (), ())
+        chenille_model = PlanningModel("chenille", PlanningOptions(yarn_weight=6, hook_size_mm=5.5, fiber_type="chenille"), (), (), (), ())
+
+        cotton = _simulation_config_for_plan(cotton_model)
+        chenille = _simulation_config_for_plan(chenille_model)
+
+        self.assertGreater(chenille.stitch_width, cotton.stitch_width)
+        self.assertGreater(chenille.stuffing_pressure, cotton.stuffing_pressure)
+        self.assertGreater(cotton.spring_stiffness, chenille.spring_stiffness)
 
 
 def _round(number: int, stitch_count: int, previous: int, delta: int, action: str) -> RoundSpec:

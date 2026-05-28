@@ -206,15 +206,13 @@ def _quantity_for_planned_part(part_name: str, planning_model: PlanningModel) ->
 
 
 def _simulation_config_for_plan(planning_model: PlanningModel):
-    body = next((part for part in planning_model.parts if "body" in part.name.lower() or "torso" in part.name.lower()), None)
-    if body is None and planning_model.parts:
-        body = planning_model.parts[0]
-    yarn_type = (body.yarn_type if body else "acrylic").lower().strip()
-    fiber = "chenille" if "chenille" in yarn_type or "velvet" in yarn_type else yarn_type
+    fiber = (planning_model.options.fiber_type or "acrylic").lower().strip()
+    if fiber == "velvet/chenille":
+        fiber = "chenille"
     if fiber not in {"acrylic", "cotton", "wool", "chenille"}:
         fiber = "acrylic"
-    weight = 6 if fiber == "chenille" else 2 if fiber == "cotton" else 4
-    hook = 5.5 if fiber == "chenille" else 2.5 if fiber == "cotton" else 3.75 if fiber == "wool" else 3.5
+    weight = max(1, min(7, int(planning_model.options.yarn_weight)))
+    hook = max(0.5, float(planning_model.options.hook_size_mm))
     return simulation_config_from_yarn(yarn_profile(weight=weight, hook_mm=hook, fiber=fiber))  # type: ignore[arg-type]
 
 

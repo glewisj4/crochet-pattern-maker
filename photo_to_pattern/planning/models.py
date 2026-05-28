@@ -9,6 +9,7 @@ from typing import Literal
 
 ViewKind = Literal["front", "side", "back", "top", "unknown"]
 SemanticCategory = Literal["Primary Body", "Accents", "Appendages", "Overlaid Garments", "Facial Embroidery", "Insets"]
+YarnFiberOption = Literal["acrylic", "cotton", "wool", "chenille", "velvet/chenille"]
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,9 @@ class PlanningOptions:
     infant_safe: bool = False
     gemini_api_key: str = ""
     aesthetic_style: str = "classic"
+    yarn_weight: int = 4
+    hook_size_mm: float = 3.5
+    fiber_type: YarnFiberOption = "acrylic"
 
 
 
