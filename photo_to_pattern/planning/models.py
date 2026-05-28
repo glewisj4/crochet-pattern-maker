@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
 ViewKind = Literal["front", "side", "back", "top", "unknown"]
 SemanticCategory = Literal["Primary Body", "Accents", "Appendages", "Overlaid Garments", "Facial Embroidery", "Insets"]
 YarnFiberOption = Literal["acrylic", "cotton", "wool", "chenille", "velvet/chenille"]
+
+
+def _default_gemini_api_key() -> str:
+    return os.environ.get("GEMINI_API_KEY", "").strip()
 
 
 @dataclass(frozen=True)
@@ -22,7 +27,7 @@ class PlanningOptions:
     detail_scale: float = 1.0
     reimagine_as_amigurumi: bool = False
     infant_safe: bool = False
-    gemini_api_key: str = ""
+    gemini_api_key: str = field(default_factory=_default_gemini_api_key)
     aesthetic_style: str = "classic"
     yarn_weight: int = 4
     hook_size_mm: float = 3.5
