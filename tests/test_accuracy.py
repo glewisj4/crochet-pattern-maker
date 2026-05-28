@@ -7,6 +7,7 @@ from unittest.mock import patch
 from PIL import Image, ImageDraw
 
 from photo_to_pattern.accuracy import build_accuracy_report
+from photo_to_pattern.accuracy.report import structural_confidence_index
 from photo_to_pattern.app import AppResult, PhotoToPatternApp
 from photo_to_pattern.geometric_math import PatternMap
 from photo_to_pattern.planning import PlanningOrchestrator
@@ -61,6 +62,33 @@ class AccuracyReportTests(unittest.TestCase):
 
             self.assertFalse(report.passed)
             self.assertTrue(any("Missing generated rounds" in issue.message for issue in report.issues))
+
+    def test_accuracy_report_hard_fails_low_structural_confidence(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = _source_image(Path(temp_dir) / "front.png")
+            view = PlanningView(kind="front", source_path=source, cleaned_path=source)
+            model = PlanningModel(
+                title="low-confidence",
+                options=PlanningOptions(),
+                views=(view,),
+                shape_guides=(),
+                proportions=(),
+                construction=(ConstructionPiece("Body", 1, "ovoid", "body"),),
+                parts=(DesignPart("Body", "ovoid", (1.0, 1.0, 0.8), (200, 180, 80), "root", "front", 0.70),),
+            )
+            planning = SimpleNamespace(model=model, card_path=source, model_json_path=None, virtual_build_path=source)
+            result = AppResult(
+                voxel_model=VoxelModel(primitives=()),
+                pattern_map=PatternMap(rounds=()),
+                crochet_pattern=CrochetPattern(title="low-confidence", stitch_style="amigurumi", terminology="US", sections=()),
+                qa_report=PatternQASimulator().evaluate(PatternMap(rounds=()), VoxelModel(primitives=())),
+            )
+
+            report = build_accuracy_report(planning, result)  # type: ignore[arg-type]
+
+            self.assertEqual(structural_confidence_index(model), 0.70)
+            self.assertFalse(report.passed)
+            self.assertTrue(any("below required 75%" in issue.message for issue in report.issues))
 
     def test_accuracy_report_explains_missing_shape_guides(self):
         with tempfile.TemporaryDirectory() as temp_dir:

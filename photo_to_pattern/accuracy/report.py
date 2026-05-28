@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from PIL import Image, ImageFilter
+
 from photo_to_pattern.app import AppResult
 from photo_to_pattern.planning import PlanningResult
 from photo_to_pattern.planning.models import DesignPart, PlanningModel
@@ -141,6 +143,16 @@ def _score_planning_model(
     if missing:
         issues.append(AccuracyIssue("error", "planning model", f"Missing generated rounds for: {', '.join(missing)}."))
 
+    structural_confidence = structural_confidence_index(model)
+    if structural_confidence < 0.75:
+        issues.append(
+            AccuracyIssue(
+                "error",
+                "planning model",
+                f"Structural planning confidence {round(structural_confidence * 100)}% is below required 75%.",
+            )
+        )
+
     confidences = [part.confidence for part in model.parts]
     confidence_score = sum(confidences) / len(confidences) if confidences else 0.55
     shape_score = _shape_guide_score(model, issues)
@@ -150,7 +162,7 @@ def _score_planning_model(
     uncertainty_penalty = min(0.12, len(model.uncertainties) * 0.03)
     score = _clamp(
         coverage * 0.55
-        + confidence_score * 0.25
+        + min(confidence_score, structural_confidence) * 0.25
         + shape_score * 0.20
         - compromise_penalty
         - uncertainty_penalty
@@ -163,8 +175,8 @@ def _score_planning_model(
     if model.uncertainties:
         issues.append(AccuracyIssue("warning", "planning model", f"{len(model.uncertainties)} planning uncertainty checkpoint(s) need review."))
 
-    message = f"{len(expected_ids) - len(missing)}/{len(expected_ids)} structural generated part(s) covered."
-    return score, AccuracyCheck("Planning model coverage", score, not missing and score >= 0.70, message)
+    message = f"{len(expected_ids) - len(missing)}/{len(expected_ids)} structural generated part(s) covered; structural confidence {_percent(structural_confidence)}."
+    return score, AccuracyCheck("Planning model coverage", score, not missing and structural_confidence >= 0.75 and score >= 0.70, message)
 
 
 def _score_crochet_feasibility(
@@ -204,6 +216,18 @@ def _score_virtual_build(
 
     if _artifact_exists(planning_result.virtual_build_path):
         score += 0.30
+        similarity = _reference_edge_similarity(planning_result)
+        if similarity is not None:
+            if similarity >= 0.18:
+                score += 0.05
+            else:
+                issues.append(
+                    AccuracyIssue(
+                        "warning",
+                        "virtual build",
+                        f"Virtual build edge similarity to uploaded reference is low ({_percent(similarity)}).",
+                    )
+                )
     else:
         issues.append(AccuracyIssue("warning", "virtual build", "Virtual build image was not generated."))
 
@@ -216,6 +240,52 @@ def _score_virtual_build(
     score += 0.05 if documented_tradeoffs else 0.03
     message = "Virtual build available; design proof available." if score >= 0.90 else "Virtual/proof artifacts are partially available."
     return _clamp(score), AccuracyCheck("Virtual build and proof artifacts", _clamp(score), score >= 0.70, message)
+
+
+def structural_confidence_index(model: PlanningModel) -> float:
+    structural = [part for part in model.parts if _is_structural_part(part)]
+    if not structural:
+        return 0.0
+    return min(part.confidence for part in structural)
+
+
+def _reference_edge_similarity(planning_result: PlanningResult) -> float | None:
+    virtual_path = planning_result.virtual_build_path
+    if virtual_path is None:
+        return None
+    reference = next((view.cleaned_path for view in planning_result.model.views if view.kind == "front"), None)
+    if reference is None:
+        reference = next((view.cleaned_path for view in planning_result.model.views if view.kind != "unknown"), None)
+    if reference is None:
+        return None
+    try:
+        return _edge_similarity(Path(virtual_path), Path(reference))
+    except OSError:
+        return None
+
+
+def _edge_similarity(first_path: Path, second_path: Path, size: tuple[int, int] = (96, 96)) -> float:
+    first_edges = _edge_pixels(first_path, size)
+    second_edges = _edge_pixels(second_path, size)
+    union = first_edges | second_edges
+    if not union:
+        return 0.0
+    return len(first_edges & second_edges) / len(union)
+
+
+def _edge_pixels(path: Path, size: tuple[int, int]) -> set[tuple[int, int]]:
+    image = Image.open(path).convert("L").resize(size)
+    edges = image.filter(ImageFilter.FIND_EDGES)
+    pixels = edges.load()
+    width, height = edges.size
+    values = [pixels[x, y] for y in range(height) for x in range(width)]
+    threshold = max(28, sorted(values)[int(len(values) * 0.84)])
+    return {
+        (x, y)
+        for y in range(height)
+        for x in range(width)
+        if pixels[x, y] >= threshold
+    }
 
 
 def _shape_guide_score(model: PlanningModel, issues: list[AccuracyIssue]) -> float:

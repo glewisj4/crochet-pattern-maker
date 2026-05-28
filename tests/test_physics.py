@@ -9,9 +9,12 @@ from photo_to_pattern.planning.virtual_build import (
     build_mass_spring_model,
     calculate_hausdorff_distance,
     hausdorff_distance,
+    render_stitch_graph_build,
+    simulation_config_from_yarn,
     simulate_virtual_physics,
     volumetric_accuracy,
 )
+from photo_to_pattern.core.yarn_physics import yarn_profile
 
 
 class Phase3PhysicsTests(unittest.TestCase):
@@ -67,6 +70,28 @@ class Phase3PhysicsTests(unittest.TestCase):
         self.assertGreaterEqual(report.hausdorff_distance, 0.0)
         self.assertGreaterEqual(report.accuracy, 0.0)
         self.assertLessEqual(report.accuracy, 1.0)
+
+    def test_simulation_config_scales_from_yarn_profile(self):
+        cotton = simulation_config_from_yarn(yarn_profile(weight=2, hook_mm=2.5, fiber="cotton"), iterations=12)
+        chenille = simulation_config_from_yarn(yarn_profile(weight=6, hook_mm=5.5, fiber="chenille"), iterations=12)
+
+        self.assertEqual(cotton.iterations, 12)
+        self.assertGreater(chenille.stitch_width, cotton.stitch_width)
+        self.assertGreater(chenille.stuffing_pressure, cotton.stuffing_pressure)
+        self.assertGreater(cotton.spring_stiffness, chenille.spring_stiffness)
+
+    def test_renders_stitch_graph_virtual_build_from_pattern_nodes(self):
+        import tempfile
+        from pathlib import Path
+
+        pattern_map = PatternMap(rounds=(_round(1, 6, 0, 6, "mr"), _round(2, 12, 6, 6, "inc"), _round(3, 12, 12, 0, "even")))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "stitch_graph.jpg"
+
+            render_stitch_graph_build(pattern_map, output, config=SimulationConfig(iterations=0))
+
+            self.assertTrue(output.exists())
+            self.assertGreater(output.stat().st_size, 0)
 
 
 def _round(number: int, stitch_count: int, previous: int, delta: int, action: str) -> RoundSpec:

@@ -14,11 +14,11 @@
 - [x] Add regression tests ensuring no limb or body components compile with their widest round sitting on an exposed un-joined edge.
 
 ## Phase 3 Correction: True Stitch-Graph Physics & Vision-Matching Validation
-- [ ] Rewrite `planning/virtual_build.py` to strip out symbolic vector drawings.
-- [ ] Implement a node-based spring renderer that strings together actual single crochet coordinate vectors.
-- [ ] Update the internal stuffing simulation model to scale its expansion limits against the elastic thresholds provided by the `YarnDynamicsEngine` (e.g., high stretch for acrylic/chenille, low stretch for cotton).
-- [ ] Implement an automated image similarity validation step (e.g., using structural edge matching) comparing the simulated virtual build directly against the original orthographic profile cards.
-- [ ] Restructure the final validation scoring logic: Force a hard failure if the true structural planning confidence index rates under 75%.
+- [x] Rewrite `planning/virtual_build.py` to strip out symbolic vector drawings.
+- [x] Implement a node-based spring renderer that strings together actual single crochet coordinate vectors.
+- [x] Update the internal stuffing simulation model to scale its expansion limits against the elastic thresholds provided by the `YarnDynamicsEngine` (e.g., high stretch for acrylic/chenille, low stretch for cotton).
+- [x] Implement an automated image similarity validation step (e.g., using structural edge matching) comparing the simulated virtual build directly against the original orthographic profile cards.
+- [x] Restructure the final validation scoring logic: Force a hard failure if the true structural planning confidence index rates under 75%.
 
 ## Phase 4: Integration, UI Update, and Deployment Packaging
 - [ ] Connect the closed-loop optimization system: automatically trigger re-compilation runs with adjusted stitch counts if the structural similarity score misses the 90% threshold.

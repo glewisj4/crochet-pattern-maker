@@ -18,8 +18,10 @@ from .integration import (
     target_mesh_from_pattern,
     target_mesh_from_voxel_model,
 )
+from .planning.virtual_build import render_stitch_graph_build, simulation_config_from_yarn
 from .vision_voxelizer import ImageFrame, LimbOcclusion, Primitive3D, Vec2, Vec3, VisionVoxelizer, VoxelModel
 from .planning.models import PlanningModel
+from .core.yarn_physics import yarn_profile
 
 
 @dataclass(frozen=True)
@@ -74,12 +76,14 @@ class PhotoToPatternApp:
         if not voxel_model.primitives:
             voxel_model = self.vision.process(image_path)
         target_mesh = target_mesh_from_voxel_model(voxel_model)
-        pattern_map = self._refine_pattern_map(generate_planned_part_pattern_map(planning_model, self.geometry.config), target_mesh)
+        simulation_config = _simulation_config_for_plan(planning_model)
+        pattern_map = self._refine_pattern_map(generate_planned_part_pattern_map(planning_model, self.geometry.config), target_mesh, simulation_config=simulation_config)
         crochet_pattern = self.formatter.format(pattern_map, title=title, planning_model=planning_model)
         crochet_pattern = _with_planned_part_sections(crochet_pattern, planning_model)
         crochet_pattern = _with_surface_detail_section(crochet_pattern, analysis)
         qa_report = self.qa.evaluate(pattern_map, voxel_model, planning_model)
-        refinement_report, dashboard_snapshot = self._runtime_reports(pattern_map, target_mesh, virtual_build_path=virtual_build_path)
+        virtual_build_path = _ensure_stitch_graph_virtual_build(pattern_map, virtual_build_path, simulation_config)
+        refinement_report, dashboard_snapshot = self._runtime_reports(pattern_map, target_mesh, virtual_build_path=virtual_build_path, simulation_config=simulation_config)
         return AppResult(
             voxel_model=voxel_model,
             pattern_map=pattern_map,
@@ -97,12 +101,13 @@ class PhotoToPatternApp:
         character_analysis: CharacterAnalysis | None = None,
     ) -> AppResult:
         target_mesh = target_mesh_from_voxel_model(voxel_model)
-        pattern_map = self._refine_pattern_map(self.geometry.generate(voxel_model), target_mesh)
+        simulation_config = simulation_config_from_yarn()
+        pattern_map = self._refine_pattern_map(self.geometry.generate(voxel_model), target_mesh, simulation_config=simulation_config)
         crochet_pattern = self.formatter.format(pattern_map, title=title)
         if character_analysis is not None:
             crochet_pattern = _with_surface_detail_section(crochet_pattern, character_analysis)
         qa_report = self.qa.evaluate(pattern_map, voxel_model)
-        refinement_report, dashboard_snapshot = self._runtime_reports(pattern_map, target_mesh)
+        refinement_report, dashboard_snapshot = self._runtime_reports(pattern_map, target_mesh, simulation_config=simulation_config)
         return AppResult(
             voxel_model=voxel_model,
             pattern_map=pattern_map,
@@ -113,18 +118,19 @@ class PhotoToPatternApp:
             dashboard_snapshot=dashboard_snapshot,
         )
 
-    def _refine_pattern_map(self, pattern_map: PatternMap, target_mesh=None) -> PatternMap:
+    def _refine_pattern_map(self, pattern_map: PatternMap, target_mesh=None, simulation_config=None) -> PatternMap:
         target_mesh = target_mesh or target_mesh_from_pattern(pattern_map)
-        return refine_pattern_until_accuracy(pattern_map, target_mesh, accuracy_target=0.90).pattern_map
+        return refine_pattern_until_accuracy(pattern_map, target_mesh, accuracy_target=0.90, simulation_config=simulation_config).pattern_map
 
     def _runtime_reports(
         self,
         pattern_map: PatternMap,
         target_mesh=None,
         virtual_build_path: str | Path | None = None,
+        simulation_config=None,
     ) -> tuple[RefinementReport, RuntimeDashboardSnapshot]:
         target_mesh = target_mesh or target_mesh_from_pattern(pattern_map)
-        refinement_report = refine_pattern_until_accuracy(pattern_map, target_mesh, accuracy_target=0.90)
+        refinement_report = refine_pattern_until_accuracy(pattern_map, target_mesh, accuracy_target=0.90, simulation_config=simulation_config)
         dashboard_snapshot = build_runtime_dashboard_snapshot(pattern_map, refinement_report.simulation_report, virtual_build_path=virtual_build_path)
         return refinement_report, dashboard_snapshot
 
@@ -197,6 +203,26 @@ def _quantity_for_planned_part(part_name: str, planning_model: PlanningModel) ->
     if construction is not None:
         return max(1, construction.quantity)
     return 2 if part_name in {"Arms", "Legs", "Ears"} else 1
+
+
+def _simulation_config_for_plan(planning_model: PlanningModel):
+    body = next((part for part in planning_model.parts if "body" in part.name.lower() or "torso" in part.name.lower()), None)
+    if body is None and planning_model.parts:
+        body = planning_model.parts[0]
+    yarn_type = (body.yarn_type if body else "acrylic").lower().strip()
+    fiber = "chenille" if "chenille" in yarn_type or "velvet" in yarn_type else yarn_type
+    if fiber not in {"acrylic", "cotton", "wool", "chenille"}:
+        fiber = "acrylic"
+    weight = 6 if fiber == "chenille" else 2 if fiber == "cotton" else 4
+    hook = 5.5 if fiber == "chenille" else 2.5 if fiber == "cotton" else 3.75 if fiber == "wool" else 3.5
+    return simulation_config_from_yarn(yarn_profile(weight=weight, hook_mm=hook, fiber=fiber))  # type: ignore[arg-type]
+
+
+def _ensure_stitch_graph_virtual_build(pattern_map: PatternMap, requested_path: str | Path | None, simulation_config) -> Path | None:
+    if requested_path is None:
+        return None
+    destination = Path(requested_path)
+    return render_stitch_graph_build(pattern_map, destination, config=simulation_config)
 
 
 def _voxel_model_from_analysis(analysis: CharacterAnalysis) -> VoxelModel:

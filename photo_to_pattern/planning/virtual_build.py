@@ -9,6 +9,7 @@ import math
 from PIL import Image, ImageDraw, ImageFont
 
 from photo_to_pattern.core import Mesh, Vertex
+from photo_to_pattern.core.yarn_physics import YarnProfile, yarn_profile
 from photo_to_pattern.geometric_math import PatternMap, RoundSpec
 
 from .models import ConstructionPiece, DesignDetail, DesignPart, PlanningModel
@@ -63,6 +64,26 @@ class SimulationConfig:
     stuffing_pressure: float = 0.035
     time_step: float = 0.16
     iterations: int = 40
+
+
+def simulation_config_from_yarn(
+    profile: YarnProfile | None = None,
+    *,
+    iterations: int = 40,
+) -> SimulationConfig:
+    """Scale spring stiffness and stuffing expansion from yarn weight and fiber elasticity."""
+
+    active_profile = profile or yarn_profile()
+    stitch_width = max(0.45, active_profile.strand_thickness_mm / 3.0)
+    elasticity = active_profile.elasticity
+    return SimulationConfig(
+        stitch_width=stitch_width,
+        spring_stiffness=active_profile.spring_coefficient,
+        shear_stiffness=active_profile.spring_coefficient * 1.65,
+        damping=max(0.55, min(0.86, 0.76 - elasticity * 0.18)),
+        stuffing_pressure=max(0.015, min(0.075, 0.025 + elasticity * 0.12)),
+        iterations=iterations,
+    )
 
 
 @dataclass(frozen=True)
@@ -346,6 +367,75 @@ def render_virtual_build(
     destination.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(destination, quality=94)
     return destination
+
+
+def render_stitch_graph_build(
+    pattern_map: PatternMap,
+    output_path: str | Path,
+    *,
+    config: SimulationConfig | None = None,
+    size: tuple[int, int] = (1200, 900),
+) -> Path:
+    """Render the actual relaxed stitch-node graph generated from crochet rounds."""
+
+    destination = Path(output_path)
+    report = simulate_virtual_physics(pattern_map, config=config)
+    canvas = Image.new("RGB", size, (249, 248, 244))
+    draw = ImageDraw.Draw(canvas)
+    fonts = _fonts()
+    draw.text((34, 26), "Stitch-Graph Virtual Build", fill=(35, 37, 35), font=fonts["title"])
+    draw.text((34, 68), f"{len(report.build.nodes)} stitch nodes, {len(report.build.springs)} physical constraints", fill=(94, 98, 92), font=fonts["body"])
+
+    if report.build.nodes:
+        _draw_node_projection(draw, report.build, (80, 130, 500, 620), axes=("x", "z"), label="front stitch graph", fonts=fonts)
+        _draw_node_projection(draw, report.build, (630, 130, 500, 620), axes=("y", "z"), label="side stitch graph", fonts=fonts)
+    else:
+        draw.text((80, 150), "No stitch nodes to render.", fill=(94, 98, 92), font=fonts["body"])
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(destination, quality=94)
+    return destination
+
+
+def _draw_node_projection(
+    draw: ImageDraw.ImageDraw,
+    build: PhysicsBuild,
+    box: tuple[int, int, int, int],
+    *,
+    axes: tuple[str, str],
+    label: str,
+    fonts: dict[str, ImageFont.ImageFont],
+) -> None:
+    x, y, w, h = box
+    draw.rounded_rectangle((x, y, x + w, y + h), radius=8, fill=(255, 255, 252), outline=(221, 218, 210))
+    coords = [(_axis_value(node.position, axes[0]), _axis_value(node.position, axes[1])) for node in build.nodes]
+    min_a = min(a for a, _ in coords)
+    max_a = max(a for a, _ in coords)
+    min_b = min(b for _, b in coords)
+    max_b = max(b for _, b in coords)
+    span_a = max(max_a - min_a, 1e-9)
+    span_b = max(max_b - min_b, 1e-9)
+
+    def project(position: Vertex) -> tuple[float, float]:
+        a = (_axis_value(position, axes[0]) - min_a) / span_a
+        b = (_axis_value(position, axes[1]) - min_b) / span_b
+        return x + 34 + a * (w - 68), y + h - 50 - b * (h - 92)
+
+    for spring in build.springs:
+        if spring.kind not in {"worked_into", "shear"}:
+            continue
+        start = project(build.nodes[spring.source].position)
+        end = project(build.nodes[spring.target].position)
+        color = (108, 126, 148) if spring.kind == "worked_into" else (172, 146, 92)
+        draw.line((start[0], start[1], end[0], end[1]), fill=color, width=1)
+    for node in build.nodes:
+        px, py = project(node.position)
+        draw.ellipse((px - 2, py - 2, px + 2, py + 2), fill=(72, 123, 88))
+    draw.text((x + 18, y + h - 34), label, fill=(71, 76, 70), font=fonts["small"])
+
+
+def _axis_value(position: Vertex, axis: str) -> float:
+    return {"x": position.x, "y": position.y, "z": position.z}[axis]
 
 
 def _draw_front_build(
