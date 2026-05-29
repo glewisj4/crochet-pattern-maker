@@ -117,6 +117,21 @@ class GeminiAdapterTests(unittest.TestCase):
                 with self.assertRaises(GeminiVisionError):
                     adapter.analyze_character(img_path, "dummy_api_key")
 
+    def test_adapter_quota_error_is_concise(self):
+        adapter = GeminiAdapter()
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            mock_urlopen.side_effect = urllib.error.HTTPError(
+                "https://example.com", 429, "Too Many Requests", {}, None
+            )
+
+            with tempfile.TemporaryDirectory() as temp_dir:
+                img_path = Path(temp_dir) / "dummy.png"
+                img_path.write_bytes(b"dummy image data")
+
+                with self.assertRaises(GeminiVisionError) as ctx:
+                    adapter.analyze_character(img_path, "dummy_api_key")
+                self.assertIn("quota/rate limit", str(ctx.exception))
+
     def test_adapter_url_error(self):
         adapter = GeminiAdapter()
         with patch("urllib.request.urlopen") as mock_urlopen:

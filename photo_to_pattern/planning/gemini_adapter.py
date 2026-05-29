@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -17,10 +18,10 @@ class GeminiVisionError(RuntimeError):
 
 
 class GeminiAdapter:
-    """Lightweight HTTP client for interacting with the Gemini 1.5 Flash VLM API."""
+    """Lightweight HTTP client for interacting with the Gemini VLM API."""
 
     def analyze_character(self, image_path: Path, api_key: str) -> dict:
-        """Loads the image, encodes it, and sends it to the Gemini 1.5 Flash API.
+        """Loads the image, encodes it, and sends it to the Gemini API.
 
         Args:
             image_path: Path to the character image file.
@@ -32,7 +33,8 @@ class GeminiAdapter:
         if not api_key:
             raise GeminiVisionError("Gemini API key is required; local heuristic fallback is disabled.")
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+        model = _gemini_model()
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
 
         try:
             with open(image_path, "rb") as f:
@@ -95,16 +97,16 @@ class GeminiAdapter:
                 # Extract the text response
                 candidates = resp_json.get("candidates", [])
                 if not candidates:
-                    raise GeminiVisionError("No candidates in Gemini response.")
+                    raise GeminiVisionError(f"No candidates in Gemini response from {model}.")
 
                 content = candidates[0].get("content", {})
                 parts = content.get("parts", [])
                 if not parts:
-                    raise GeminiVisionError("No parts in Gemini content response.")
+                    raise GeminiVisionError(f"No parts in Gemini content response from {model}.")
 
                 text = parts[0].get("text", "")
                 if not text:
-                    raise GeminiVisionError("Empty text block in Gemini response parts.")
+                    raise GeminiVisionError(f"Empty text block in Gemini response parts from {model}.")
 
                 # Strip markdown blocks just in case they were returned
                 text_clean = text.strip()
@@ -122,8 +124,26 @@ class GeminiAdapter:
 
                 return parsed_result
 
-        except (urllib.error.HTTPError, urllib.error.URLError) as e:
-            raise GeminiVisionError(f"HTTP/URL Error in Gemini API call: {e}") from e
+        except urllib.error.HTTPError as e:
+            body = ""
+            try:
+                body = e.read().decode("utf-8", errors="replace")
+            except Exception:
+                body = ""
+            if e.code == 404:
+                raise GeminiVisionError(
+                    f"Gemini model '{model}' was not found or does not support generateContent. "
+                    "Set GEMINI_MODEL to a model listed by the Gemini API, such as gemini-2.0-flash."
+                ) from e
+            if e.code == 429:
+                raise GeminiVisionError(
+                    f"Gemini quota/rate limit reached for model '{model}'. "
+                    "Check the API project's Gemini billing/quota or retry after quota resets."
+                ) from e
+            detail = f": {body}" if body else ""
+            raise GeminiVisionError(f"HTTP Error in Gemini API call using model '{model}': HTTP {e.code} {e.reason}{detail}") from e
+        except urllib.error.URLError as e:
+            raise GeminiVisionError(f"URL Error in Gemini API call using model '{model}': {e}") from e
         except Exception as e:
             if isinstance(e, GeminiVisionError):
                 raise
@@ -138,6 +158,10 @@ SEMANTIC_CATEGORIES = {
     "Facial Embroidery",
     "Insets",
 }
+
+
+def _gemini_model() -> str:
+    return os.environ.get("GEMINI_MODEL", "gemini-2.0-flash").strip() or "gemini-2.0-flash"
 
 
 def _validate_semantic_payload(payload: dict) -> None:
